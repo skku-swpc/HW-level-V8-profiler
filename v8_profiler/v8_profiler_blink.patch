@@ -1,0 +1,612 @@
+diff --git a/.gitignore b/.gitignore
+index a230e8f..9d7d3e1 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -35,3 +35,5 @@ tags
+ # For best performance, place rules for deep paths in the parent directory.
+ # For example: instead of placing Source/WebKit/chromium/WebKit.xcodeproj here,
+ # place WebKit.xcodeproj in Source/WebKit/chromium/.gitignore
++
++cscope.out
+diff --git a/Source/bindings/core/v8/V8Initializer.cpp b/Source/bindings/core/v8/V8Initializer.cpp
+index f3bf9e6..a09e170 100644
+--- a/Source/bindings/core/v8/V8Initializer.cpp
++++ b/Source/bindings/core/v8/V8Initializer.cpp
+@@ -159,6 +159,9 @@ static void messageHandlerInMainThread(v8::Local<v8::Message> message, v8::Local
+     RefPtrWillBeRawPtr<ErrorEvent> event = ErrorEvent::create(errorMessage, resourceName, lineNumber, columnNumber, &scriptState->world());
+ 
+     String messageForConsole = extractMessageForConsole(isolate, data);
++
++		// ESLAB
++		printf("%s\n", messageForConsole.utf8().data());
+     if (!messageForConsole.isEmpty())
+         event->setUnsanitizedMessage("Uncaught " + messageForConsole);
+ 
+diff --git a/Source/core/css/resolver/StyleResolver.cpp b/Source/core/css/resolver/StyleResolver.cpp
+index 47d059d..53687f7 100644
+--- a/Source/core/css/resolver/StyleResolver.cpp
++++ b/Source/core/css/resolver/StyleResolver.cpp
+@@ -1271,7 +1271,6 @@ void StyleResolver::applyProperties(StyleResolverState& state, const StyleProper
+ 
+         if (!CSSPropertyPriorityData<priority>::propertyHasPriority(property))
+             continue;
+-
+         StyleBuilder::applyProperty(current.id(), state, current.value());
+     }
+ }
+@@ -1323,6 +1322,8 @@ void StyleResolver::applyMatchedProperties(StyleResolverState& state, const Matc
+     const Element* element = state.element();
+     ASSERT(element);
+ 
++//		TRACE_EVENT0("blink", "applyMatchedProperties");
++
+     INCREMENT_STYLE_STATS_COUNTER(*this, matchedPropertyApply);
+ 
+     unsigned cacheHash = matchResult.isCacheable ? computeMatchedPropertiesHash(matchResult.matchedProperties.data(), matchResult.matchedProperties.size()) : 0;
+@@ -1353,7 +1354,6 @@ void StyleResolver::applyMatchedProperties(StyleResolverState& state, const Matc
+         }
+         applyInheritedOnly = true;
+     }
+-
+     // Now we have all of the matched rules in the appropriate order. Walk the rules and apply
+     // high-priority properties first, i.e., those properties that other properties depend on.
+     // The order is (1) high-priority not important, (2) high-priority important, (3) normal not important
+diff --git a/Source/core/frame/ConsoleBase.cpp b/Source/core/frame/ConsoleBase.cpp
+index f1d00bf..7575dbc 100644
+--- a/Source/core/frame/ConsoleBase.cpp
++++ b/Source/core/frame/ConsoleBase.cpp
+@@ -38,6 +38,12 @@
+ #include "wtf/text/CString.h"
+ #include "wtf/text/WTFString.h"
+ 
++#define LOG_TAG "blink"		// [YJ]
++#include <android/log.h>	// [YJ]
++#include <sys/syscall.h>	// [YJ]
++#include <unistd.h>				// [YJ]
++
++
+ namespace blink {
+ 
+ ConsoleBase::~ConsoleBase()
+@@ -218,6 +224,25 @@ void ConsoleBase::internalAddMessage(MessageType type, MessageLevel level, Scrip
+     String message;
+     bool gotStringMessage = arguments ? arguments->getFirstArgumentAsString(message) : false;
+ 
++		    // [YJ] start
++    if (gotStringMessage) {
++			static int traceNumber = 0; 
++      if (message.utf8() == "ICTime Start") {
++					traceNumber++;
++//	         printLog("[YJ] System Call - App Start");
++					char buf[50];
++					sprintf(buf, "Application%d", traceNumber); 
++          syscall(376, 'O', buf);
++      }
++       else if (message.utf8() == "ICTime End") {
++//	         printLog("[YJ] System Call - App End");
++					char buf[50];
++					sprintf(buf, "Application%d", traceNumber); 
++	        syscall(376, 'F', buf);
++	      }
++   }
++  // [YJ] end
++
+     RefPtrWillBeRawPtr<ConsoleMessage> consoleMessage = ConsoleMessage::create(ConsoleAPIMessageSource, level, gotStringMessage? message : String());
+     consoleMessage->setType(type);
+     consoleMessage->setScriptState(scriptState);
+diff --git a/Source/core/frame/ConsoleBase.cpp.org b/Source/core/frame/ConsoleBase.cpp.org
+new file mode 100644
+index 0000000..2064465
+--- /dev/null
++++ b/Source/core/frame/ConsoleBase.cpp.org
+@@ -0,0 +1,252 @@
++/*
++ * Copyright (C) 2007 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * 1.  Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ * 2.  Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in the
++ *     documentation and/or other materials provided with the distribution.
++ * 3.  Neither the name of Apple Computer, Inc. ("Apple") nor the names of
++ *     its contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE AND ITS CONTRIBUTORS "AS IS" AND ANY
++ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL APPLE OR ITS CONTRIBUTORS BE LIABLE FOR ANY
++ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "core/frame/Console.h"
++
++#include "bindings/core/v8/ScriptCallStackFactory.h"
++#include "core/inspector/ConsoleMessage.h"
++#include "core/inspector/InspectorConsoleInstrumentation.h"
++#include "core/inspector/InspectorTraceEvents.h"
++#include "core/inspector/ScriptArguments.h"
++#include "platform/TraceEvent.h"
++#include "wtf/text/CString.h"
++#include "wtf/text/WTFString.h"
++
++#define LOG_TAG "blink"		// [YJ]
++#include <android/log.h>	// [YJ]
++#include <sys/syscall.h>	// [YJ]
++#include <unistd.h>				// [YJ]
++
++
++namespace blink {
++
++ConsoleBase::~ConsoleBase()
++{
++}
++
++void ConsoleBase::debug(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, DebugMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::error(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, ErrorMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::info(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, InfoMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::log(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::warn(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, WarningMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::dir(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(DirMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::dirxml(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(DirXMLMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::table(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(TableMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::clear(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(ClearMessageType, LogMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::trace(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(TraceMessageType, LogMessageLevel, scriptState, arguments, true, true);
++}
++
++void ConsoleBase::assertCondition(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments, bool condition)
++{
++    if (condition)
++        return;
++
++    internalAddMessage(AssertMessageType, ErrorMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::count(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    RefPtrWillBeRawPtr<ScriptCallStack> callStack(createScriptCallStackForConsole(1));
++    const ScriptCallFrame& lastCaller = callStack->at(0);
++    // Follow Firebug's behavior of counting with null and undefined title in
++    // the same bucket as no argument
++    String title;
++    arguments->getFirstArgumentAsString(title);
++    String identifier = title.isEmpty() ? String(lastCaller.sourceURL() + ':' + String::number(lastCaller.lineNumber()))
++        : String(title + '@');
++
++    HashCountedSet<String>::AddResult result = m_counts.add(identifier);
++    String message = title + ": " + String::number(result.storedValue->value);
++
++    RefPtrWillBeRawPtr<ConsoleMessage> consoleMessage = ConsoleMessage::create(ConsoleAPIMessageSource, DebugMessageLevel, message);
++    consoleMessage->setType(CountMessageType);
++    consoleMessage->setScriptState(scriptState);
++    consoleMessage->setCallStack(callStack.release());
++    reportMessageToConsole(consoleMessage.release());
++}
++
++void ConsoleBase::markTimeline(const String& title)
++{
++    timeStamp(title);
++}
++
++void ConsoleBase::profile(const String& title)
++{
++    InspectorInstrumentation::consoleProfile(context(), title);
++}
++
++void ConsoleBase::profileEnd(const String& title)
++{
++    InspectorInstrumentation::consoleProfileEnd(context(), title);
++}
++
++void ConsoleBase::time(const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_BEGIN0("blink.console", title.utf8().data(), this);
++
++    if (title.isNull())
++        return;
++
++    m_times.add(title, monotonicallyIncreasingTime());
++}
++
++void ConsoleBase::timeEnd(ScriptState* scriptState, const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_END0("blink.console", title.utf8().data(), this);
++
++    // Follow Firebug's behavior of requiring a title that is not null or
++    // undefined for timing functions
++    if (title.isNull())
++        return;
++
++    HashMap<String, double>::iterator it = m_times.find(title);
++    if (it == m_times.end())
++        return;
++
++    double startTime = it->value;
++    m_times.remove(it);
++
++    double elapsed = monotonicallyIncreasingTime() - startTime;
++    String message = title + String::format(": %.3fms", elapsed * 1000);
++
++    RefPtrWillBeRawPtr<ConsoleMessage> consoleMessage = ConsoleMessage::create(ConsoleAPIMessageSource, DebugMessageLevel, message);
++    consoleMessage->setType(TimeEndMessageType);
++    consoleMessage->setScriptState(scriptState);
++    consoleMessage->setCallStack(createScriptCallStackForConsole(1));
++    reportMessageToConsole(consoleMessage.release());
++}
++
++void ConsoleBase::timeStamp(const String& title)
++{
++    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "TimeStamp", TRACE_EVENT_SCOPE_THREAD, "data", InspectorTimeStampEvent::data(context(), title));
++}
++
++static String formatTimelineTitle(const String& title)
++{
++    return String::format("Timeline '%s'", title.utf8().data());
++}
++
++void ConsoleBase::timeline(ScriptState* scriptState, const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_BEGIN0("blink.console", formatTimelineTitle(title).utf8().data(), this);
++}
++
++void ConsoleBase::timelineEnd(ScriptState* scriptState, const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_END0("blink.console", formatTimelineTitle(title).utf8().data(), this);
++}
++
++void ConsoleBase::group(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(StartGroupMessageType, LogMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::groupCollapsed(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(StartGroupCollapsedMessageType, LogMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::groupEnd()
++{
++    internalAddMessage(EndGroupMessageType, LogMessageLevel, nullptr, nullptr, true);
++}
++
++void ConsoleBase::internalAddMessage(MessageType type, MessageLevel level, ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> scriptArguments, bool acceptNoArguments, bool printTrace)
++{
++    RefPtrWillBeRawPtr<ScriptArguments> arguments = scriptArguments;
++    if (!acceptNoArguments && (!arguments || !arguments->argumentCount()))
++        return;
++
++    String message;
++    bool gotStringMessage = arguments ? arguments->getFirstArgumentAsString(message) : false;
++/*
++		    // [YJ] start
++    if (gotStringMessage) {
++      if (message.utf8() == "ICTime Start") {
++//	         printLog("[YJ] System Call - App Start");
++          syscall(376, 'O', "Application");
++          syscall(376, 'B', "V8.Execute");
++      }
++       else if (message.utf8() == "ICTime End") {
++//	         printLog("[YJ] System Call - App End");
++			     syscall(376, 'E', "V8.Execute");
++	         syscall(376, 'F', "Application");
++	      }
++   }
++  // [YJ] end
++*/
++    RefPtrWillBeRawPtr<ConsoleMessage> consoleMessage = ConsoleMessage::create(ConsoleAPIMessageSource, level, gotStringMessage? message : String());
++    consoleMessage->setType(type);
++    consoleMessage->setScriptState(scriptState);
++    consoleMessage->setScriptArguments(arguments);
++
++    size_t stackSize = printTrace ? ScriptCallStack::maxCallStackSizeToCapture : 1;
++    consoleMessage->setCallStack(createScriptCallStackForConsole(stackSize));
++    reportMessageToConsole(consoleMessage.release());
++}
++
++} // namespace blink
+diff --git a/Source/core/frame/ConsoleBase.cpp.profile b/Source/core/frame/ConsoleBase.cpp.profile
+new file mode 100644
+index 0000000..e71199c
+--- /dev/null
++++ b/Source/core/frame/ConsoleBase.cpp.profile
+@@ -0,0 +1,252 @@
++/*
++ * Copyright (C) 2007 Apple Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ *
++ * 1.  Redistributions of source code must retain the above copyright
++ *     notice, this list of conditions and the following disclaimer.
++ * 2.  Redistributions in binary form must reproduce the above copyright
++ *     notice, this list of conditions and the following disclaimer in the
++ *     documentation and/or other materials provided with the distribution.
++ * 3.  Neither the name of Apple Computer, Inc. ("Apple") nor the names of
++ *     its contributors may be used to endorse or promote products derived
++ *     from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE AND ITS CONTRIBUTORS "AS IS" AND ANY
++ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
++ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
++ * DISCLAIMED. IN NO EVENT SHALL APPLE OR ITS CONTRIBUTORS BE LIABLE FOR ANY
++ * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
++ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
++ * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
++ * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "config.h"
++#include "core/frame/Console.h"
++
++#include "bindings/core/v8/ScriptCallStackFactory.h"
++#include "core/inspector/ConsoleMessage.h"
++#include "core/inspector/InspectorConsoleInstrumentation.h"
++#include "core/inspector/InspectorTraceEvents.h"
++#include "core/inspector/ScriptArguments.h"
++#include "platform/TraceEvent.h"
++#include "wtf/text/CString.h"
++#include "wtf/text/WTFString.h"
++
++#define LOG_TAG "blink"		// [YJ]
++#include <android/log.h>	// [YJ]
++#include <sys/syscall.h>	// [YJ]
++#include <unistd.h>				// [YJ]
++
++
++namespace blink {
++
++ConsoleBase::~ConsoleBase()
++{
++}
++
++void ConsoleBase::debug(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, DebugMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::error(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, ErrorMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::info(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, InfoMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::log(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::warn(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(LogMessageType, WarningMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::dir(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(DirMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::dirxml(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(DirXMLMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::table(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(TableMessageType, LogMessageLevel, scriptState, arguments);
++}
++
++void ConsoleBase::clear(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(ClearMessageType, LogMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::trace(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(TraceMessageType, LogMessageLevel, scriptState, arguments, true, true);
++}
++
++void ConsoleBase::assertCondition(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments, bool condition)
++{
++    if (condition)
++        return;
++
++    internalAddMessage(AssertMessageType, ErrorMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::count(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    RefPtrWillBeRawPtr<ScriptCallStack> callStack(createScriptCallStackForConsole(1));
++    const ScriptCallFrame& lastCaller = callStack->at(0);
++    // Follow Firebug's behavior of counting with null and undefined title in
++    // the same bucket as no argument
++    String title;
++    arguments->getFirstArgumentAsString(title);
++    String identifier = title.isEmpty() ? String(lastCaller.sourceURL() + ':' + String::number(lastCaller.lineNumber()))
++        : String(title + '@');
++
++    HashCountedSet<String>::AddResult result = m_counts.add(identifier);
++    String message = title + ": " + String::number(result.storedValue->value);
++
++    RefPtrWillBeRawPtr<ConsoleMessage> consoleMessage = ConsoleMessage::create(ConsoleAPIMessageSource, DebugMessageLevel, message);
++    consoleMessage->setType(CountMessageType);
++    consoleMessage->setScriptState(scriptState);
++    consoleMessage->setCallStack(callStack.release());
++    reportMessageToConsole(consoleMessage.release());
++}
++
++void ConsoleBase::markTimeline(const String& title)
++{
++    timeStamp(title);
++}
++
++void ConsoleBase::profile(const String& title)
++{
++    InspectorInstrumentation::consoleProfile(context(), title);
++}
++
++void ConsoleBase::profileEnd(const String& title)
++{
++    InspectorInstrumentation::consoleProfileEnd(context(), title);
++}
++
++void ConsoleBase::time(const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_BEGIN0("blink.console", title.utf8().data(), this);
++
++    if (title.isNull())
++        return;
++
++    m_times.add(title, monotonicallyIncreasingTime());
++}
++
++void ConsoleBase::timeEnd(ScriptState* scriptState, const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_END0("blink.console", title.utf8().data(), this);
++
++    // Follow Firebug's behavior of requiring a title that is not null or
++    // undefined for timing functions
++    if (title.isNull())
++        return;
++
++    HashMap<String, double>::iterator it = m_times.find(title);
++    if (it == m_times.end())
++        return;
++
++    double startTime = it->value;
++    m_times.remove(it);
++
++    double elapsed = monotonicallyIncreasingTime() - startTime;
++    String message = title + String::format(": %.3fms", elapsed * 1000);
++
++    RefPtrWillBeRawPtr<ConsoleMessage> consoleMessage = ConsoleMessage::create(ConsoleAPIMessageSource, DebugMessageLevel, message);
++    consoleMessage->setType(TimeEndMessageType);
++    consoleMessage->setScriptState(scriptState);
++    consoleMessage->setCallStack(createScriptCallStackForConsole(1));
++    reportMessageToConsole(consoleMessage.release());
++}
++
++void ConsoleBase::timeStamp(const String& title)
++{
++    TRACE_EVENT_INSTANT1(TRACE_DISABLED_BY_DEFAULT("devtools.timeline"), "TimeStamp", TRACE_EVENT_SCOPE_THREAD, "data", InspectorTimeStampEvent::data(context(), title));
++}
++
++static String formatTimelineTitle(const String& title)
++{
++    return String::format("Timeline '%s'", title.utf8().data());
++}
++
++void ConsoleBase::timeline(ScriptState* scriptState, const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_BEGIN0("blink.console", formatTimelineTitle(title).utf8().data(), this);
++}
++
++void ConsoleBase::timelineEnd(ScriptState* scriptState, const String& title)
++{
++    TRACE_EVENT_COPY_ASYNC_END0("blink.console", formatTimelineTitle(title).utf8().data(), this);
++}
++
++void ConsoleBase::group(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(StartGroupMessageType, LogMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::groupCollapsed(ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> arguments)
++{
++    internalAddMessage(StartGroupCollapsedMessageType, LogMessageLevel, scriptState, arguments, true);
++}
++
++void ConsoleBase::groupEnd()
++{
++    internalAddMessage(EndGroupMessageType, LogMessageLevel, nullptr, nullptr, true);
++}
++
++void ConsoleBase::internalAddMessage(MessageType type, MessageLevel level, ScriptState* scriptState, PassRefPtrWillBeRawPtr<ScriptArguments> scriptArguments, bool acceptNoArguments, bool printTrace)
++{
++    RefPtrWillBeRawPtr<ScriptArguments> arguments = scriptArguments;
++    if (!acceptNoArguments && (!arguments || !arguments->argumentCount()))
++        return;
++
++    String message;
++    bool gotStringMessage = arguments ? arguments->getFirstArgumentAsString(message) : false;
++
++		    // [YJ] start
++    if (gotStringMessage) {
++      if (message.utf8() == "ICTime Start") {
++//	         printLog("[YJ] System Call - App Start");
++          syscall(376, 'O', "Application");
++          syscall(376, 'B', "V8.Execute");
++      }
++       else if (message.utf8() == "ICTime End") {
++//	         printLog("[YJ] System Call - App End");
++			     syscall(376, 'E', "V8.Execute");
++	         syscall(376, 'F', "Application");
++	      }
++   }
++  // [YJ] end
++
++    RefPtrWillBeRawPtr<ConsoleMessage> consoleMessage = ConsoleMessage::create(ConsoleAPIMessageSource, level, gotStringMessage? message : String());
++    consoleMessage->setType(type);
++    consoleMessage->setScriptState(scriptState);
++    consoleMessage->setScriptArguments(arguments);
++
++    size_t stackSize = printTrace ? ScriptCallStack::maxCallStackSizeToCapture : 1;
++    consoleMessage->setCallStack(createScriptCallStackForConsole(stackSize));
++    reportMessageToConsole(consoleMessage.release());
++}
++
++} // namespace blink
